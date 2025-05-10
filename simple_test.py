@@ -4,7 +4,7 @@ from pure_pursuit_controller import PurePursuitController
 from stanley_controller import StanleyController
 from ackermann_model import AckermannSlipModel
 from simulatorv2 import Simulator
-
+from visualize_sim import VisualizerSim
 
 def run_simulation(
     use_differential, path_x, path_y, path_theta, control_method="pure_pursuit"
@@ -60,3 +60,9 @@ if __name__ == "__main__":
     plt.grid(True)
     plt.tight_layout()
     plt.show()
+
+    # Visualize in PyBullet
+    viz = VisualizerSim(path_x, path_y)
+    viz.add_car_trajectory(log_with["traj_x"], log_with["traj_y"], log_with["traj_theta"], color=[0, 0, 1, 1])  # Blue
+    viz.add_car_trajectory(log_without["traj_x"], log_without["traj_y"], log_without["traj_theta"], color=[1, 0, 0, 1])  # Red
+    viz.render(sleep_time=0.01, record_video=True, follow_car_index=1)
