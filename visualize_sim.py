@@ -49,7 +49,7 @@ class VisualizerSim:
                 baseOrientation=orientation
             )
 
-    def render(self, sleep_time=0.01, record_video=False, video_path="car_path.mp4", follow_car_index=None):
+    def render(self, sleep_time=0.01, record_video=False, video_path="car_path2.mp4", follow_car_index=None):
         # PyBullet setup
         p.connect(p.GUI)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())

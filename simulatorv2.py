@@ -1,13 +1,15 @@
 import numpy as np
 from velocity_controller import VelocityPID
-from base_velocity_controller import BaseVelocityController
+from base_velocity_controller import BaseController
 from motor_actuator import MotorActuator
+from motor_controller import MotorPID
 import pybullet as p
 import pybullet_data
 import time
 
 
 class Simulator:
+
     def __init__(
         self,
         model,
@@ -15,15 +17,18 @@ class Simulator:
         x0=0.0,
         y0=0.0,
         theta0=0.0,
-        v_ref=1.0,
-        dt=0.01,
+        v_ref=1,
+        dt=0.002,
         T=20.0,
         use_velocity_pid=True,
-        velocity_controller: BaseVelocityController = None,
+        velocity_controller: BaseController = None,
         dt_traj=0.1,
         dt_ctrl=0.05,
-        dt_act=0.02,
+        dt_act=0.002,
         dt_dyn=0.01,
+        path_x=None,
+        path_y=None,
+        path_theta=None,
     ):
         self.model = model
         self.controller = controller
@@ -66,6 +71,8 @@ class Simulator:
             "traj_y": [y0],
             "traj_theta": [theta0],
             "delta_cmd": [],
+            "vel_l_cmd": [],
+            "vel_r_cmd": [],
             "v_cmd": [],
             "rpm_mean": [],
         }
@@ -75,13 +82,44 @@ class Simulator:
         self.rpm_l_cmd = 0.0
         self.rpm_r_cmd = 0.0
 
-        self.motor_left = MotorActuator()
-        self.motor_right = MotorActuator()
+        self.motor_left = MotorActuator(dt=self.dt_act)
+        self.motor_right = MotorActuator(dt=self.dt_act)
+        self.motor_left_controller = MotorPID()
+        self.motor_right_controller = MotorPID()
+        self.velocity_controller = (velocity_controller if velocity_controller is not None else VelocityPID(
+            kp=0.183222, ki=13.61028, kd=0.0001))
 
-        if velocity_controller is not None:
-            self.velocity_controller = velocity_controller
-        else:
-            self.velocity_controller = VelocityPID(kp=0.025, ki=0.01, kd=0.00001)
+        self.path_x = path_x
+        self.path_y = path_y
+        self.path_theta = path_theta
+
+    def update_mpc_reference(self):
+        if self.path_x is None or self.path_y is None or self.path_theta is None:
+            return
+
+        dists = np.hypot(np.array(self.path_x) - self.x, np.array(self.path_y) - self.y)
+        idx = np.argmin(dists)
+
+        N = self.controller.N
+        ref_slice = slice(idx, idx + N)
+
+        # Criando vetor de velocidades constantes 1.0 m/s
+        path_v = np.ones(len(self.path_x)) * 1.0
+
+        # Extrai fatia da referência incluindo velocidade constante
+        x_refs = np.stack([
+            self.path_x[ref_slice],
+            self.path_y[ref_slice],
+            self.path_theta[ref_slice],
+            path_v[ref_slice],
+        ],
+                          axis=1)
+
+        if x_refs.shape[0] < N:
+            last_row = x_refs[-1]
+            x_refs = np.vstack([x_refs, np.tile(last_row, (N - x_refs.shape[0], 1))])
+
+        self.controller.set_reference(x_refs)
 
     def trajectory_control(self):
         v_meas = 0.0
@@ -89,9 +127,21 @@ class Simulator:
             rpm = self.rpms[-1]
             v_meas = (rpm * 2 * np.pi * self.model.r) / 60.0
 
-        self.delta_cmd, _ = self.controller.compute_steering_angle(
-            self.x, self.y, self.theta, v_meas, self.model.L
-        )
+        if self.controller.control_name == "mpc":
+            self.update_mpc_reference()
+
+        if self.controller.control_name in ["stanley", "pure pursuit"]:
+            self.delta_cmd, _ = self.controller.compute_steering_angle(self.x, self.y, self.theta, v_meas, self.model.L)
+            self.vl_ref = self.v_ref
+            self.vr_ref = self.v_ref
+
+        elif self.controller.control_name == "mpc":
+            self.delta_cmd, (self.vl_ref,
+                             self.vr_ref) = self.controller.compute_steering_angle(self.x, self.y, self.theta, v_meas,
+                                                                                   self.model.L)
+            self.system_log["delta_cmd"].append(self.delta_cmd)
+            self.system_log["vel_l_cmd"].append(self.vl_ref)
+            self.system_log["vel_r_cmd"].append(self.vr_ref)
 
     def velocity_control(self):
         v_meas = 0.0
@@ -99,32 +149,49 @@ class Simulator:
             rpm = self.rpms[-1]
             v_meas = (rpm * 2 * np.pi * self.model.r) / 60.0
 
-        if self.use_velocity_pid:
-            self.v_cmd = self.v_ref + self.velocity_controller.control(
-                self.v_ref, v_meas, self.dt_ctrl
-            )
+        if self.controller.control_name == "mpc":
+            return
         else:
-            self.v_cmd = self.v_ref
+            v_ref = self.v_ref
 
-        self.v_cmd = np.clip(self.v_cmd, 0, 3.0)
+        if self.use_velocity_pid:
+            u_ctrl = self.velocity_controller.control(v_ref, v_meas, self.dt_ctrl)
+        else:
+            u_ctrl = v_ref / 3.0    # Normalize if not using PID
+
+        u_ctrl = np.clip(u_ctrl, 0.0, 1.2)
+        self.motor_left_input = u_ctrl
+        self.motor_right_input = u_ctrl
+        self.v_cmd = v_ref
 
     def rpm_control(self):
-        rpm_cmd = (self.v_cmd * 60) / (2 * np.pi * self.model.r)
-        self.rpm_l_cmd = rpm_cmd
-        self.rpm_r_cmd = rpm_cmd
-        # PI do motor
-        voltage_cmd = self.v_cmd / self.model.r / self.motor_left.K
-        #
-        self.motor_left.set_voltage(voltage_cmd)
-        self.motor_right.set_voltage(voltage_cmd)
-        self.system_log["voltage_l"].append(voltage_cmd)
-        self.system_log["voltage_r"].append(voltage_cmd)
+        if self.controller.control_name == "mpc":
+            self.rpm_l_cmd = (self.vl_ref * 60) / (2 * np.pi * self.model.r)
+            self.rpm_r_cmd = (self.vr_ref * 60) / (2 * np.pi * self.model.r)
+        else:
+            rpm_cmd = (self.v_cmd * 60) / (2 * np.pi * self.model.r)
+            self.rpm_l_cmd = rpm_cmd
+            self.rpm_r_cmd = rpm_cmd
+
+        if len(self.rpms) <= 0:
+            self.rpm_l = 0
+            self.rpm_r = 0
+
+        self.motor_right_input = self.motor_right_controller.control(rmp_ref=self.rpm_r_cmd, rpm=self.rpm_r) * 6 / 100
+        self.motor_left_input = self.motor_left_controller.control(self.rpm_l_cmd, self.rpm_l) * 6 / 100
+        self.motor_left.u = self.motor_left_input
+        self.motor_right.u = self.motor_right_input
+
         self.system_log["rpm_l_ref"].append(self.rpm_l_cmd)
         self.system_log["rpm_r_ref"].append(self.rpm_r_cmd)
+        self.system_log["voltage_l"].append(self.motor_left_input)
+        self.system_log["voltage_r"].append(self.motor_right_input)
 
     def actuator_dynamics(self):
-        self.rpm_l, _, _ = self.motor_left.step(self.dt_act)
-        self.rpm_r, _, _ = self.motor_right.step(self.dt_act)
+        self.rpm_l = self.motor_left.step()
+        self.rpm_r = self.motor_right.step()
+
+        #print(f'rpm = {self.rpm_l}')
         self.system_log["rpm_l_actual"].append(self.rpm_l)
         self.system_log["rpm_r_actual"].append(self.rpm_r)
 
@@ -154,7 +221,6 @@ class Simulator:
         self.system_log["traj_x"].append(self.x)
         self.system_log["traj_y"].append(self.y)
         self.system_log["traj_theta"].append(self.theta)
-        self.system_log["delta_cmd"].append(self.delta_cmd)
         self.system_log["v_cmd"].append(self.v_cmd)
         self.system_log["rpm_mean"].append((self.rpm_l + self.rpm_r) / 2.0)
 
@@ -180,78 +246,13 @@ class Simulator:
             self.time += self.dt
 
     def get_system_states(self):
+        for k, v in self.system_log.items():
+            try:
+                arr = np.array(v)
+            except Exception as e:
+                print(f"Erro ao converter '{k}': {e}")
+                for i, item in enumerate(v):
+                    print(
+                        f"  item[{i}] = {item}, type: {type(item)}, shape: {np.shape(item) if hasattr(item, 'shape') else 'scalar'}"
+                    )
         return {k: np.array(v) for k, v in self.system_log.items()}
-
-    def visualize_with_pybullet(self, box_size=(0.4, 0.2, 0.1), sleep_time=0.01):
-        import os
-        import math
-        import pybullet as p
-        import pybullet_data
-
-        p.connect(p.GUI)
-        p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        p.setGravity(0, 0, -9.81)
-
-        # Disable debug overlays
-        for flag in [
-            p.COV_ENABLE_GUI,
-            p.COV_ENABLE_SHADOWS,
-            p.COV_ENABLE_RGB_BUFFER_PREVIEW,
-            p.COV_ENABLE_DEPTH_BUFFER_PREVIEW,
-            p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW,
-        ]:
-            p.configureDebugVisualizer(flag, 0)
-
-        # White ground box dimensions
-        width = 30
-        height = 30
-        thickness = 0.01
-
-        # Create a simple white ground plane (box)
-        visual_shape_id = p.createVisualShape(
-            shapeType=p.GEOM_BOX,
-            halfExtents=[width, height, thickness / 2],
-            rgbaColor=[0.25, 0.25, 0.25, 0.8],  # White color
-            specularColor=[0, 0, 0],
-        )
-
-        collision_shape_id = p.createCollisionShape(
-            shapeType=p.GEOM_BOX, halfExtents=[width / 2, height / 2, thickness / 2]
-        )
-
-        ground_id = p.createMultiBody(
-            baseMass=0,
-            baseCollisionShapeIndex=collision_shape_id,
-            baseVisualShapeIndex=visual_shape_id,
-            basePosition=[width / 2, height / 2, thickness / 2],
-            baseOrientation=[0, 0, 0, 1],  # No rotation
-        )
-
-        # Create red box car
-        car_shape_id = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[s / 2 for s in box_size],
-            rgbaColor=[1, 0, 0, 1],
-        )
-        car_id = p.createMultiBody(
-            baseMass=1,
-            baseVisualShapeIndex=car_shape_id,
-            basePosition=[self.traj_x[0], self.traj_y[0], box_size[2] / 2],
-        )
-
-        # Run simulation
-        for x, y, theta in zip(self.traj_x, self.traj_y, self.traj_theta):
-            orn = p.getQuaternionFromEuler([0, 0, theta])
-            p.resetBasePositionAndOrientation(car_id, [x, y, box_size[2] / 2], orn)
-
-            # p.resetDebugVisualizerCamera(
-            #     cameraDistance=4.0,
-            #     cameraYaw=0,
-            #     cameraPitch=-30,
-            #     cameraTargetPosition=[x, y, 0.5],
-            # )
-
-            p.stepSimulation()
-            time.sleep(sleep_time)
-
-        p.disconnect()

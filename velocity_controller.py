@@ -1,7 +1,9 @@
-from base_velocity_controller import BaseVelocityController
+from base_velocity_controller import BaseController
 
-class VelocityPID(BaseVelocityController):
-    def __init__(self, kp=0.1, ki=0.01, kd=0.0):
+
+class VelocityPID(BaseController):
+
+    def __init__(self, kp=0.183222, ki=13.61028, kd=0.0):
         self.kp = kp
         self.ki = ki
         self.kd = kd
