@@ -1,4 +1,50 @@
-from base_velocity_controller import BaseController
+class BaseController:
+    """
+    A simple base class for controllers.
+    
+    This class is intended to define a common interface for controllers
+    that take a reference (setpoint) and a current measurement to compute
+    a control output, and may have resettable internal states.
+    """
+
+    def __init__(self):
+        """
+        Base constructor.
+        Child classes can call super().__init__() if they wish to extend this,
+        though this simple base __init__ currently does not perform extensive setup.
+        It can be used to set common attributes if needed in the future.
+        """
+        # You could set a default name or other common properties here if desired, e.g.:
+        # self.controller_type = "GenericSISOController"
+        pass    # Keep it minimal for now as MotorPID doesn't call super().__init__()
+
+    def control(self, ref: float, y: float) -> float:
+        """
+        Computes the control signal based on the reference and current process variable.
+
+        This method MUST be implemented by child classes like MotorPID.
+
+        Args:
+            ref (float): The reference value (setpoint) for the controlled variable.
+            y (float): The current measured value of the controlled variable.
+
+        Returns:
+            float: The computed control signal.
+        
+        Raises:
+            NotImplementedError: If the child class does not implement this method.
+        """
+        raise NotImplementedError("The control() method must be implemented by child classes.")
+
+    def reset(self):
+        """
+        Resets any internal states of the controller.
+
+        This method SHOULD be implemented by child classes if they maintain
+        internal states that need to be reset (e.g., integrator sum, previous error).
+        The default implementation does nothing.
+        """
+        pass
 
 
 class MotorPID(BaseController):
@@ -28,14 +74,14 @@ class MotorPID(BaseController):
     """
 
     def __init__(
-        self,
-        kp: float = 1.5,
-        ki: float = 0.5,
-        kd: float = 0.0,
-        N: float = 3.0,  # Derivative filter coefficient
-        ts: float = 0.05,  # Sampling time in seconds
-        sat_u: float = 100.0,  # Upper saturation limit for output
-        sat_l: float = 0.0):  # Lower saturation limit for output
+            self,
+            kp: float = 1.5,
+            ki: float = 0.5,
+            kd: float = 0.0,
+            N: float = 3.0,    # Derivative filter coefficient
+            ts: float = 0.05,    # Sampling time in seconds
+            sat_u: float = 100.0,    # Upper saturation limit for output
+            sat_l: float = 0.0):    # Lower saturation limit for output
         """
         Initializes the PID controller with specified gains and parameters.
 
@@ -55,12 +101,10 @@ class MotorPID(BaseController):
         if ts <= 0:
             raise ValueError("Sampling time (ts) must be positive.")
         if N <= 0:
-            raise ValueError(
-                "Derivative filter coefficient (N) must be positive.")
+            raise ValueError("Derivative filter coefficient (N) must be positive.")
         if sat_l >= sat_u:
-            raise ValueError(
-                "Lower saturation limit (sat_l) must be less than "
-                "upper saturation limit (sat_u).")
+            raise ValueError("Lower saturation limit (sat_l) must be less than "
+                             "upper saturation limit (sat_u).")
 
         self.kp = kp
         self.ki = ki
@@ -88,30 +132,28 @@ class MotorPID(BaseController):
                 # gamma_D becomes 0, effectively disabling the derivative term.
                 # This might be acceptable, or a different formulation for an
                 # ID controller (no Kp) would be needed if kd should act independently.
-                print(
-                    f"Warning: PID kd={self.kd} is non-zero but kp=0. "
-                    "The derivative term's effective gain (via gamma_D) will be zero "
-                    "with the current Td_std = kd/kp based formulation. "
-                    "Consider using non-zero kp or a different derivative structure "
-                    "if an ID controller with active derivative is intended.")
-            Td_std = 0.0  # Disables derivative if kp=0 or if kd=0
-        else:  # kp != 0
+                print(f"Warning: PID kd={self.kd} is non-zero but kp=0. "
+                      "The derivative term's effective gain (via gamma_D) will be zero "
+                      "with the current Td_std = kd/kp based formulation. "
+                      "Consider using non-zero kp or a different derivative structure "
+                      "if an ID controller with active derivative is intended.")
+            Td_std = 0.0    # Disables derivative if kp=0 or if kd=0
+        else:    # kp != 0
             Td_std = self.kd / self.kp
 
-        if Td_std == 0.0:  # Handles kd=0 or the kp=0 case above
-            self.beta_D = 0.0  # No derivative history if Td_std is 0
-            self.gamma_D = 0.0  # No derivative action if Td_std is 0
+        if Td_std == 0.0:    # Handles kd=0 or the kp=0 case above
+            self.beta_D = 0.0    # No derivative history if Td_std is 0
+            self.gamma_D = 0.0    # No derivative action if Td_std is 0
         else:
             # Denominator for beta_D and gamma_D calculation
             # This is Td_std + N*Ts. Should be positive if Td_std >= 0, N > 0, Ts > 0.
             denominator_D = Td_std + self.N * self.ts
-            if denominator_D <= 0:  # Should not happen with valid parameters
+            if denominator_D <= 0:    # Should not happen with valid parameters
                 # (e.g. if Td_std became unexpectedly negative and large)
-                print(
-                    f"Warning: Derivative denominator is non-positive ({denominator_D}). "
-                    "Derivative term will be unstable or disabled.")
-                self.beta_D = 1.0  # Freeze derivative term to avoid issues
-                self.gamma_D = 0.0  # Disable derivative action
+                print(f"Warning: Derivative denominator is non-positive ({denominator_D}). "
+                      "Derivative term will be unstable or disabled.")
+                self.beta_D = 1.0    # Freeze derivative term to avoid issues
+                self.gamma_D = 0.0    # Disable derivative action
             else:
                 self.beta_D = Td_std / denominator_D
                 # Original gamma was (kp * N * Td_std) / denominator_D
@@ -120,10 +162,10 @@ class MotorPID(BaseController):
                 self.gamma_D = (self.kp * self.N * Td_std) / denominator_D
 
         # Initialize states for the controller
-        self.e_ant = 0.0  # Previous error e[k-1]
-        self.ui_ant = 0.0  # Previous integral component Ui[k-1]
-        self.ud_ant = 0.0  # Previous derivative component Ud[k-1]
-        self.y_ant = 0.0  # Previous process variable y[k-1]
+        self.e_ant = 0.0    # Previous error e[k-1]
+        self.ui_ant = 0.0    # Previous integral component Ui[k-1]
+        self.ud_ant = 0.0    # Previous derivative component Ud[k-1]
+        self.y_ant = 0.0    # Previous process variable y[k-1]
 
     def control(self, ref: float, y: float) -> float:
         """
@@ -175,7 +217,7 @@ class MotorPID(BaseController):
         # --- Update previous values for the next iteration ---
         self.e_ant = e
         self.y_ant = y
-        self.ud_ant = ud  # Store the calculated derivative component Ud[k]
+        self.ud_ant = ud    # Store the calculated derivative component Ud[k]
 
         return output_saturated
 
