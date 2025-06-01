@@ -37,6 +37,8 @@ class BaseController:
         self.current_y = 0.0
         self.current_theta = 0.0
         self.current_v = 0.0    # Current vehicle speed
+        self.current_vl_speed = 0.0
+        self.current_vr_speed = 0.0
 
         # Initialize path variables. Can be set initially or via the `set_path` method.
         # Using '_' prefix to indicate they are primarily managed by set_path or init.
@@ -71,7 +73,8 @@ class BaseController:
         self._path_v = np.array(path_v) if path_v is not None else np.array([])
         # print(f"Path updated for {self.control_name}.")
 
-    def update_states(self, current_x: float, current_y: float, current_theta: float, current_v: float):
+    def update_states(self, current_x: float, current_y: float, current_theta: float, current_v: float, current_vl_speed: float,
+                      current_vr_speed: float):
         """
         Updates the controller's internal knowledge of the vehicle's current state.
 
@@ -83,11 +86,15 @@ class BaseController:
             current_y (float): Current y-coordinate of the vehicle.
             current_theta (float): Current orientation (yaw angle) of the vehicle (radians).
             current_v (float): Current longitudinal speed of the vehicle (m/s).
+            current_vl_speed (float): Current longitudinal speed of the vehicle left wheel (m/s).
+            current_vr_speed (float): Current longitudinal speed of the vehicle right wheel (m/s).
         """
         self.current_x = current_x
         self.current_y = current_y
         self.current_theta = current_theta
         self.current_v = current_v
+        self.current_vl_speed = current_vl_speed
+        self.current_vr_speed = current_vr_speed
 
     def compute_control(self) -> dict:
         """

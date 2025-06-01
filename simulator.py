@@ -81,7 +81,7 @@ class Simulator:
             "rpm_ref": [],    # Store entries like {t, rpm_l_ref, rpm_r_ref}
             "rpms": [],    # Store entries like {t, rpm_l, rpm_r}
             "vehicle_pose": [],    # Store entries like {t, x, y, theta, beta}
-            "vehicle_speeds": [],    # Store linear and angular mean velocity {t, vl, dtheta} 
+            "vehicle_speeds": [],    # Store linear and angular mean velocity {t, vl, dtheta, vl_speed, vr_speed} 
             "control_delta": [],    # Store entries like {t, delta_cmd}
             "motor_cmd": [],    # Store the control action for each motor {t, motor_cmd_l, motor_cmd_r}
             "vel_cmd": [],    # Store the commanded velocitires {t, vl_ref, vr_ref}
@@ -121,8 +121,8 @@ class Simulator:
             self.time += self.dt
 
     def _path_control(self):
-        current_car_speed = self._car_speed()
-        self.controller.update_states(self.x, self.y, self.theta, current_car_speed)
+        current_car_speed, vl_current_speed, vr_current_speed = self._car_speed()
+        self.controller.update_states(self.x, self.y, self.theta, current_car_speed, vl_current_speed, vr_current_speed)
 
         control_commands = self.controller.compute_control()
 
@@ -146,7 +146,7 @@ class Simulator:
             return
 
         if self.use_velocity_controller:
-            self.car_speed = self._car_speed()
+            car_speed, _, _ = self._car_speed()
             # add the control method in the future
             # cdm_vel_car = self.velocity_controller.control(self.v_car_ref, self.car_speed)    # return the var velocity in m/s
         else:
@@ -199,7 +199,8 @@ class Simulator:
         # Log pose and speeds (now including angular velocity)
         # The key "vehicle_speeds" in system_log will now store [time, linear_v, angular_omega]
         self.system_log["vehicle_pose"].append([self.time, self.x, self.y, self.theta, beta])
-        self.system_log["vehicle_speeds"].append([self.time, self._car_speed(), angular_velocity_rad_s])
+        car_speed, vl_speed, vr_speed = self._car_speed()
+        self.system_log["vehicle_speeds"].append([self.time, car_speed, angular_velocity_rad_s, vl_speed, vr_speed])
 
     # Auxiliary functions
 
@@ -208,8 +209,8 @@ class Simulator:
         phi_r = self._rpm_to_rads(self.rpm_r)
         v_l_linear = self.model.r * phi_l
         v_r_linear = self.model.r * phi_r
-
-        return (v_l_linear + v_r_linear) / 2.0
+        car_speed = (v_l_linear + v_r_linear) / 2.0
+        return car_speed, v_l_linear, v_r_linear
 
     def _rpm_to_rads(self, rpm):
         return rpm * (2 * pi) / 60.0
