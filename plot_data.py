@@ -37,7 +37,8 @@ class SimulationPlotter:
                 elif key == "vehicle_pose":
                     columns = ['time', 'x', 'y', 'theta', 'beta']
                 elif key == "vehicle_speeds":
-                    columns = ['time', 'linear_v', 'angular_omega_rads']
+                # Adicione as colunas para vl_speed e vr_speed
+                    columns = ['time', 'linear_v', 'angular_omega_rads', 'v_left_actual', 'v_right_actual']
                 elif key == "control_delta":
                     columns = ['time', 'delta_rad']
                 elif key == "vel_cmd":    # For MPC linear velocity commands

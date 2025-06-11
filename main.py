@@ -29,21 +29,29 @@ def run_simulation(use_mechanical_differential_model, path_x, path_y, path_theta
     elif control_method == "stanley":
         controller = StanleyController(model=model, path_x=path_x, path_y=path_y, path_theta=path_theta, k=0.001)
     elif control_method == "mpc":
-        print("Warning: MPCController needs refactoring to align with BaseController for full compatibility.")
-        # MPC instantiation might need 'model' if it's to follow BaseController pattern
-        controller = MPCController(dt=0.1, horizon=30, use_differential=use_mechanical_differential_model)
-        if hasattr(controller, 'set_path'):
-            controller.set_path(path_x, path_y, path_theta)
-        elif hasattr(controller, 'set_reference'):
-            print("MPC reference setting might need specific adaptation here for the new BaseController structure.")
-            # Example: Create the reference array in the format MPC expects
-            # N_mpc = controller.N # Assuming N is accessible
-            # ref_v_mpc = np.ones(len(path_x)) * v_car_ref_sim # Example target speed
-            # mpc_refs_array = np.column_stack([path_x, path_y, path_theta, ref_v_mpc])
-            # This part needs careful alignment with how MPC's set_reference expects data
-            # and how it gets its current reference window.
-            # For now, we'll assume it might not be fully functional without MPC refactor.
-            pass
+        # MPCController is designed to work with BaseController if instantiated correctly.
+        # Provide model, path, and MPC-specific parameters.
+        path_v_ref = np.ones(len(path_x)) * v_car_ref_sim  # Example target speed for the path
+        
+        # Example Q and R diagonal values for MPC cost function
+        # q_diag: [x_err, y_err, theta_err, v_err]
+        # r_diag: [delta_v_left, delta_v_right, delta_steer_angle]
+        q_diag_mpc = [5.0, 5.0, 10.0, 100] 
+        r_diag_mpc = [0.1, 0.1, 1.0] 
+
+        controller = MPCController(
+            model=model,
+            path_x=path_x,
+            path_y=path_y,
+            path_theta=path_theta,
+            ref_v = 0.75,  # Pass reference velocities for the path
+            dt=0.1,             # MPC sample time, consider aligning with sim.dt_path_controller
+            horizon=5,         # Prediction horizon (N)
+            control_horizon_m=2, # Control horizon (M)
+            use_differential=use_mechanical_differential_model, # For slip constraint
+            q_diag=q_diag_mpc,  # State error costs
+            r_diag=r_diag_mpc   # Control input change costs
+        )
     else:
         raise ValueError(f"Unknown control method: {control_method}")
 
@@ -69,7 +77,7 @@ def run_simulation(use_mechanical_differential_model, path_x, path_y, path_theta
 
 
 if __name__ == "__main__":
-    CONTROL_METHOD = "stanley"    # Options: "pure_pursuit", "stanley" (MPC needs refactor)
+    CONTROL_METHOD = "mpc"    # Options: "pure_pursuit", "stanley" (MPC needs refactor)
     V_CAR_REF_MAIN = 0.75
     T_MAIN = 25.0
     # Parameter for AckermannSlipModel's differential behavior
@@ -78,9 +86,9 @@ if __name__ == "__main__":
     # Create reference path
     path_gen = PathGenerator(start_pos=(0, 0), start_theta=0)
     path_gen.add_straight(length=5)
-    path_gen.add_curve(radius=3, angle_deg=90)
+    path_gen.add_curve(radius=3, angle_deg=60)
     path_gen.add_straight(length=5)
-    path_gen.add_curve(radius=4, angle_deg=-60)
+    path_gen.add_curve(radius=4, angle_deg=60)
     path_gen.add_straight(length=3)
     path_x, path_y, path_theta = path_gen.get_path()
 

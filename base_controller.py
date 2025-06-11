@@ -39,6 +39,7 @@ class BaseController:
         self.current_v = 0.0    # Current vehicle speed
         self.current_vl_speed = 0.0
         self.current_vr_speed = 0.0
+        self.current_delta = 0.0
 
         # Initialize path variables. Can be set initially or via the `set_path` method.
         # Using '_' prefix to indicate they are primarily managed by set_path or init.
@@ -74,7 +75,7 @@ class BaseController:
         # print(f"Path updated for {self.control_name}.")
 
     def update_states(self, current_x: float, current_y: float, current_theta: float, current_v: float, current_vl_speed: float,
-                      current_vr_speed: float):
+                      current_vr_speed: float, current_delta: float):
         """
         Updates the controller's internal knowledge of the vehicle's current state.
 
@@ -95,6 +96,7 @@ class BaseController:
         self.current_v = current_v
         self.current_vl_speed = current_vl_speed
         self.current_vr_speed = current_vr_speed
+        self.current_delta = current_delta
 
     def compute_control(self) -> dict:
         """

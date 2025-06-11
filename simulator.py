@@ -74,7 +74,7 @@ class Simulator:
         self.delta_cmd = 0
         self.vl_ref = 0
         self.vr_ref = 0
-
+        self.delta_cmd = controller.current_delta
         # Logs
 
         self.system_log = {
@@ -122,7 +122,7 @@ class Simulator:
 
     def _path_control(self):
         current_car_speed, vl_current_speed, vr_current_speed = self._car_speed()
-        self.controller.update_states(self.x, self.y, self.theta, current_car_speed, vl_current_speed, vr_current_speed)
+        self.controller.update_states(self.x, self.y, self.theta, current_car_speed, vl_current_speed, vr_current_speed, self.delta_cmd)
 
         control_commands = self.controller.compute_control()
 
