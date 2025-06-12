@@ -17,7 +17,8 @@ class SimulationPlotter:
                            to be used in plot legends (e.g., ["With Diff", "Without Diff"]).
         """
         if len(log_data_list) != len(labels):
-            raise ValueError("The number of log_data sets must match the number of labels.")
+            raise ValueError(
+                "The number of log_data sets must match the number of labels.")
 
         self.log_data_list = log_data_list
         self.labels = labels
@@ -27,8 +28,8 @@ class SimulationPlotter:
         for log_data in self.log_data_list:
             processed = {}
             for key, data_entries in log_data.items():
-                if not data_entries:    # Skip empty logs
-                    processed[key] = pd.DataFrame()    # Empty DataFrame
+                if not data_entries:  # Skip empty logs
+                    processed[key] = pd.DataFrame()  # Empty DataFrame
                     continue
 
                 # Determine columns based on key or data structure
@@ -37,12 +38,17 @@ class SimulationPlotter:
                 elif key == "vehicle_pose":
                     columns = ['time', 'x', 'y', 'theta', 'beta']
                 elif key == "vehicle_speeds":
-                # Adicione as colunas para vl_speed e vr_speed
-                    columns = ['time', 'linear_v', 'angular_omega_rads', 'v_left_actual', 'v_right_actual']
+                    # Adicione as colunas para vl_speed e vr_speed
+                    columns = [
+                        'time', 'linear_v', 'angular_omega_rads',
+                        'v_left_actual', 'v_right_actual'
+                    ]
                 elif key == "control_delta":
                     columns = ['time', 'delta_rad']
-                elif key == "vel_cmd":    # For MPC linear velocity commands
+                elif key == "vel_cmd":  # For MPC linear velocity commands
                     columns = ['time', 'v_left_cmd', 'v_right_cmd']
+                elif key == "mpc_du":  # For MPC linear velocity commands
+                    columns = ['time', 'dvl', 'dvr', 'd_delta']
                 else:
                     # Fallback for unknown keys or structures; try generic conversion
                     # print(f"Warning: Unknown log key '{key}' or unhandled data structure in __init__.")
@@ -51,13 +57,18 @@ class SimulationPlotter:
                         processed[key] = pd.DataFrame(data_entries)
                     except Exception as e:
                         # print(f"  Could not convert log key '{key}' to DataFrame: {e}")
-                        processed[key] = pd.DataFrame()    # Assign empty DataFrame on failure
+                        processed[key] = pd.DataFrame(
+                        )  # Assign empty DataFrame on failure
                     continue
 
                 # Ensure all entries have the correct number of columns before creating DataFrame
-                valid_entries = [entry for entry in data_entries if len(entry) == len(columns)]
+                valid_entries = [
+                    entry for entry in data_entries
+                    if len(entry) == len(columns)
+                ]
                 if valid_entries:
-                    processed[key] = pd.DataFrame(valid_entries, columns=columns)
+                    processed[key] = pd.DataFrame(valid_entries,
+                                                  columns=columns)
                 else:
                     # Create empty DataFrame with specified columns if no valid entries
                     processed[key] = pd.DataFrame(columns=columns)
@@ -83,11 +94,15 @@ class SimulationPlotter:
             heading_scale (float, optional): Scale factor for quiver arrows. Smaller is longer.
             heading_width (float, optional): Width of the quiver arrows.
         """
-        plt.figure(figsize=(12, 9))    # Adjusted size slightly
+        plt.figure(figsize=(12, 9))  # Adjusted size slightly
         if reference_path_x is not None and reference_path_y is not None:
-            plt.plot(reference_path_x, reference_path_y, "k-", label="Reference Path", linewidth=2)
+            plt.plot(reference_path_x,
+                     reference_path_y,
+                     "k-",
+                     label="Reference Path",
+                     linewidth=2)
 
-        heading_label_added = False    # To add "Vehicle Heading" label only once
+        heading_label_added = False  # To add "Vehicle Heading" label only once
 
         for i, log in enumerate(self.processed_logs):
             df_pose = log.get("vehicle_pose")
@@ -95,8 +110,12 @@ class SimulationPlotter:
                all(col in df_pose.columns for col in ['x', 'y', 'theta']):
 
                 # Plot the trajectory line
-                line, = plt.plot(df_pose['x'], df_pose['y'], linestyle='--', label=f"Trajectory: {self.labels[i]}")
-                trajectory_color = line.get_color()    # Get the color of the plotted line
+                line, = plt.plot(df_pose['x'],
+                                 df_pose['y'],
+                                 linestyle='--',
+                                 label=f"Trajectory: {self.labels[i]}")
+                trajectory_color = line.get_color(
+                )  # Get the color of the plotted line
 
                 # Add quiver for heading at intervals
                 # Ensure there are enough points to slice with the step
@@ -117,15 +136,18 @@ class SimulationPlotter:
                         np.sin(quiver_theta),
                         scale=heading_scale,
                         width=heading_width,
-                        color=trajectory_color,    # Use trajectory color for consistency
-                    # label=current_quiver_label,
+                        color=
+                        trajectory_color,  # Use trajectory color for consistency
+                        # label=current_quiver_label,
                         angles='xy',
-                        scale_units='xy',    # Makes arrows scale with data units
+                        scale_units='xy',  # Makes arrows scale with data units
                         headwidth=3,
                         headlength=4,
                         minshaft=1,
-                        minlength=1)    # Arrowhead properties
-                elif len(df_pose['x']) > 0:    # Plot at least one arrow if path is very short
+                        minlength=1)  # Arrowhead properties
+                elif len(
+                        df_pose['x']
+                ) > 0:  # Plot at least one arrow if path is very short
                     quiver_x = df_pose['x'].iloc[0]
                     quiver_y = df_pose['y'].iloc[0]
                     quiver_theta = df_pose['theta'].iloc[0]
@@ -141,7 +163,7 @@ class SimulationPlotter:
                         scale=heading_scale,
                         width=heading_width,
                         color=trajectory_color,
-                    #    label=current_quiver_label,
+                        #    label=current_quiver_label,
                         angles='xy',
                         scale_units='xy',
                         headwidth=3,
@@ -174,18 +196,30 @@ class SimulationPlotter:
             # Plot Left Wheel RPMs on axs[0]
             df_rpm_ref = log.get("rpm_ref")
             if df_rpm_ref is not None and not df_rpm_ref.empty and 'left' in df_rpm_ref.columns and 'time' in df_rpm_ref.columns:
-                axs[0].plot(df_rpm_ref['time'], df_rpm_ref['left'], linestyle='--', label=f"{label_prefix} Left Ref")
+                axs[0].plot(df_rpm_ref['time'],
+                            df_rpm_ref['left'],
+                            linestyle='--',
+                            label=f"{label_prefix} Left Ref")
 
             df_rpms_actual = log.get("rpms")
             if df_rpms_actual is not None and not df_rpms_actual.empty and 'left' in df_rpms_actual.columns and 'time' in df_rpms_actual.columns:
-                axs[0].plot(df_rpms_actual['time'], df_rpms_actual['left'], linestyle='-', label=f"{label_prefix} Left Actual")
+                axs[0].plot(df_rpms_actual['time'],
+                            df_rpms_actual['left'],
+                            linestyle='-',
+                            label=f"{label_prefix} Left Actual")
 
             # Plot Right Wheel RPMs on axs[1]
             if df_rpm_ref is not None and not df_rpm_ref.empty and 'right' in df_rpm_ref.columns and 'time' in df_rpm_ref.columns:
-                axs[1].plot(df_rpm_ref['time'], df_rpm_ref['right'], linestyle='--', label=f"{label_prefix} Right Ref")
+                axs[1].plot(df_rpm_ref['time'],
+                            df_rpm_ref['right'],
+                            linestyle='--',
+                            label=f"{label_prefix} Right Ref")
 
             if df_rpms_actual is not None and not df_rpms_actual.empty and 'right' in df_rpms_actual.columns and 'time' in df_rpms_actual.columns:
-                axs[1].plot(df_rpms_actual['time'], df_rpms_actual['right'], linestyle='-', label=f"{label_prefix} Right Actual")
+                axs[1].plot(df_rpms_actual['time'],
+                            df_rpms_actual['right'],
+                            linestyle='-',
+                            label=f"{label_prefix} Right Actual")
 
         axs[0].set_ylabel("Left Wheel RPM")
         axs[0].legend(loc='upper right')
@@ -196,7 +230,7 @@ class SimulationPlotter:
         axs[1].legend(loc='upper right')
         axs[1].grid(True)
 
-        plt.tight_layout(rect=[0, 0, 1, 0.96])    # Adjust layout for suptitle
+        plt.tight_layout(rect=[0, 0, 1, 0.96])  # Adjust layout for suptitle
         plt.show()
 
     def plot_motor_commands(self, title_suffix=""):
@@ -205,7 +239,8 @@ class SimulationPlotter:
         for left and right motors in subplots.
         """
         fig, axs = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
-        fig.suptitle(f"Motor Command Signals Comparison {title_suffix}", fontsize=16)
+        fig.suptitle(f"Motor Command Signals Comparison {title_suffix}",
+                     fontsize=16)
 
         for i, log in enumerate(self.processed_logs):
             label_prefix = self.labels[i]
@@ -213,9 +248,15 @@ class SimulationPlotter:
 
             if df_motor_cmd is not None and not df_motor_cmd.empty:
                 if 'left' in df_motor_cmd.columns and 'time' in df_motor_cmd.columns:
-                    axs[0].plot(df_motor_cmd['time'], df_motor_cmd['left'], linestyle='-', label=f"{label_prefix} Left Cmd")
+                    axs[0].plot(df_motor_cmd['time'],
+                                df_motor_cmd['left'],
+                                linestyle='-',
+                                label=f"{label_prefix} Left Cmd")
                 if 'right' in df_motor_cmd.columns and 'time' in df_motor_cmd.columns:
-                    axs[1].plot(df_motor_cmd['time'], df_motor_cmd['right'], linestyle='-', label=f"{label_prefix} Right Cmd")
+                    axs[1].plot(df_motor_cmd['time'],
+                                df_motor_cmd['right'],
+                                linestyle='-',
+                                label=f"{label_prefix} Right Cmd")
 
         axs[0].set_ylabel("Left Motor Command")
         axs[0].legend(loc='upper right')
@@ -236,7 +277,9 @@ class SimulationPlotter:
             label_prefix = self.labels[i]
             df_delta = log.get("control_delta")
             if df_delta is not None and not df_delta.empty and 'delta_rad' in df_delta.columns and 'time' in df_delta.columns:
-                plt.plot(df_delta['time'], np.rad2deg(df_delta['delta_rad']), label=f"{label_prefix} Steering Angle [deg]")
+                plt.plot(df_delta['time'],
+                         np.rad2deg(df_delta['delta_rad']),
+                         label=f"{label_prefix} Steering Angle [deg]")
 
         plt.xlabel("Time (s)")
         plt.ylabel("Steering Angle (degrees)")
@@ -249,19 +292,28 @@ class SimulationPlotter:
     def plot_vehicle_speeds(self, target_linear_speed=None, title_suffix=""):
         """Plots linear and angular vehicle speeds."""
         fig, axs = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-        fig.suptitle(f"Vehicle Speeds Profile Comparison {title_suffix}", fontsize=16)
+        fig.suptitle(f"Vehicle Speeds Profile Comparison {title_suffix}",
+                     fontsize=16)
 
         for i, log in enumerate(self.processed_logs):
             label_prefix = self.labels[i]
             df_speeds = log.get("vehicle_speeds")
             if df_speeds is not None and not df_speeds.empty:
                 if 'linear_v' in df_speeds.columns and 'time' in df_speeds.columns:
-                    axs[0].plot(df_speeds['time'], df_speeds['linear_v'], label=f"{label_prefix} Linear Speed (m/s)")
+                    axs[0].plot(df_speeds['time'],
+                                df_speeds['linear_v'],
+                                label=f"{label_prefix} Linear Speed (m/s)")
                 if 'angular_omega_rads' in df_speeds.columns and 'time' in df_speeds.columns:
-                    axs[1].plot(df_speeds['time'], np.rad2deg(df_speeds['angular_omega_rads']), label=f"{label_prefix} Angular Velocity (deg/s)")
+                    axs[1].plot(
+                        df_speeds['time'],
+                        np.rad2deg(df_speeds['angular_omega_rads']),
+                        label=f"{label_prefix} Angular Velocity (deg/s)")
 
         if target_linear_speed is not None:
-            axs[0].axhline(target_linear_speed, color='r', linestyle='--', label=f'Target Speed ({target_linear_speed} m/s)')
+            axs[0].axhline(target_linear_speed,
+                           color='r',
+                           linestyle='--',
+                           label=f'Target Speed ({target_linear_speed} m/s)')
 
         axs[0].set_ylabel("Linear Speed (m/s)")
         axs[0].legend(loc='upper right')
@@ -273,4 +325,104 @@ class SimulationPlotter:
         axs[1].grid(True)
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+        plt.show()
+
+    def plot_heading_over_time(self, title_suffix=""):
+        """
+        Plots the vehicle's heading (theta) over time for all logs, with an optional reference heading.
+
+        Args:
+            reference_heading_data (pd.DataFrame, optional): DataFrame with 'time' and 'theta' (in radians)
+                                                             columns for the reference heading.
+            title_suffix (str, optional): Suffix for the plot title.
+        """
+        plt.figure(figsize=(12, 6))
+
+        # Plot the heading from each simulation log
+        for i, log in enumerate(self.processed_logs):
+            label_prefix = self.labels[i]
+            df_pose = log.get("vehicle_pose")
+            if df_pose is not None and not df_pose.empty and 'theta' in df_pose.columns and 'time' in df_pose.columns:
+                # Convert theta from radians to degrees for plotting
+                heading_deg = np.rad2deg(df_pose['theta'])
+                plt.plot(df_pose['time'],
+                         heading_deg,
+                         label=f"{label_prefix} Actual Heading")
+
+        plt.xlabel("Time (s)")
+        plt.ylabel("Heading (degrees)")
+        plt.title(f"Vehicle Heading Over Time {title_suffix}")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+    def plot_mpc_du(self, title_suffix=""):
+        """
+        Plots the MPC control inputs (delta u) over time using a stairstep plot.
+        """
+        fig, axs = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
+        fig.suptitle(f"MPC Control Inputs (du) Comparison {title_suffix}",
+                     fontsize=16)
+
+        for i, log in enumerate(self.processed_logs):
+            label_prefix = self.labels[i]
+            df_mpc_du = log.get("mpc_du")
+
+            if df_mpc_du is not None and not df_mpc_du.empty:
+                time_points = df_mpc_du['time'].to_numpy()
+
+                # --- Helper function to create edges ---
+                def create_edges(times):
+                    if len(
+                            times
+                    ) < 2:  # Cannot create edges from less than 2 points
+                        return np.append(times, times[-1] +
+                                         1.0) if len(times) == 1 else []
+                    # Calculate the last time step and append the final edge
+                    dt = times[-1] - times[-2]
+                    return np.append(times, times[-1] + dt)
+
+                # Plot dvl (delta velocity left)
+                if 'dvl' in df_mpc_du.columns and not df_mpc_du.empty:
+                    values = df_mpc_du['dvl'].to_numpy()
+                    edges = create_edges(time_points)
+                    if len(values) + 1 == len(edges):
+                        axs[0].stairs(values,
+                                      edges,
+                                      label=f"{label_prefix} ΔV Left")
+
+                # Plot dvr (delta velocity right)
+                if 'dvr' in df_mpc_du.columns and not df_mpc_du.empty:
+                    values = df_mpc_du['dvr'].to_numpy()
+                    edges = create_edges(time_points)
+                    if len(values) + 1 == len(edges):
+                        axs[1].stairs(values,
+                                      edges,
+                                      label=f"{label_prefix} ΔV Right")
+
+                # Plot d_delta (delta steering angle)
+                if 'd_delta' in df_mpc_du.columns and not df_mpc_du.empty:
+                    values_rad = df_mpc_du['d_delta'].to_numpy()
+                    values_deg = np.rad2deg(values_rad)
+                    edges = create_edges(time_points)
+                    if len(values_deg) + 1 == len(edges):
+                        axs[2].stairs(values_deg,
+                                      edges,
+                                      label=f"{label_prefix} ΔSteering")
+
+        axs[0].set_ylabel("ΔV Left (m/s)")
+        axs[0].legend(loc='upper right')
+        axs[0].grid(True)
+
+        axs[1].set_ylabel("ΔV Right (m/s)")
+        axs[1].legend(loc='upper right')
+        axs[1].grid(True)
+
+        axs[2].set_ylabel("ΔSteering (deg)")
+        axs[2].set_xlabel("Time (s)")
+        axs[2].legend(loc='upper right')
+        axs[2].grid(True)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
         plt.show()

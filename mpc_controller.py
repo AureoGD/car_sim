@@ -1,39 +1,42 @@
 import numpy as np
 import osqp
-from math import sin, cos, tan, pi    # Added tan, pi
+from math import sin, cos, tan, pi  # Added tan, pi
 from scipy import sparse
 from scipy.linalg import block_diag
 from base_controller import BaseController
 
 
-class MPCController(BaseController):    # Inherit from BaseController
+class MPCController(BaseController):  # Inherit from BaseController
 
     def __init__(
-            self,
-            model,    # Added model argument
-            path_x=None,
-            path_y=None,
-            path_theta=None,
-            ref_v=None,    # For full path
-            dt=0.1,
-            Q=None,
-            R=None,
-            horizon=10,
-            control_horizon_m=None,    # Explicit control horizon
-            use_differential=False,
-            q_diag=None,    # Simpler way to pass Q diagonals
-            r_diag=None,    # Simpler way to pass R diagonals
-            **kwargs):    # Catch-all for other base kwargs or future params
+        self,
+        model,  # Added model argument
+        path_x=None,
+        path_y=None,
+        path_theta=None,
+        ref_v=None,  # For full path
+        dt=0.1,
+        Q=None,
+        R=None,
+        horizon=10,
+        control_horizon_m=None,  # Explicit control horizon
+        use_differential=False,
+        q_diag=None,  # Simpler way to pass Q diagonals
+        r_diag=None,  # Simpler way to pass R diagonals
+        **kwargs):  # Catch-all for other base kwargs or future params
 
         # Call BaseController's __init__
         # It will store model parameters like self.L, self.b, self.r (if model has them)
         # and the initial full path if provided.
-        super().__init__(model, path_x=path_x, path_y=path_y, path_theta=path_theta, **kwargs)
-
+        super().__init__(model,
+                         path_x=path_x,
+                         path_y=path_y,
+                         path_theta=path_theta,
+                         **kwargs)
 
         self.control_name = "mpc"
-        self.ts = dt    # MPC sample time
-        self.N = horizon    # Prediction horizon
+        self.ts = dt  # MPC sample time
+        self.N = horizon  # Prediction horizon
 
         # Control horizon M: usually M <= N. If None, set M = N.
         self.M = control_horizon_m if control_horizon_m is not None and control_horizon_m <= self.N else self.N
@@ -46,8 +49,10 @@ class MPCController(BaseController):    # Inherit from BaseController
         self.epsilon = 0.000001
         # Dimensions for slip constraint if M constraints (one per step in control horizon)
         # self.slip_const is 1x3, so A_cons for M steps will be M x (M*nu)
-        self.l_cons_slip = -self.epsilon * np.ones((self.M, 1)) if self.use_differential else None
-        self.u_cons_slip = self.epsilon * np.ones((self.M, 1)) if self.use_differential else None
+        self.l_cons_slip = -self.epsilon * np.ones(
+            (self.M, 1)) if self.use_differential else None
+        self.u_cons_slip = self.epsilon * np.ones(
+            (self.M, 1)) if self.use_differential else None
 
         # States: x, y, theta,delta, v_vehicle_avg (vehicle speed)
         self.nx = 5
@@ -55,22 +60,24 @@ class MPCController(BaseController):    # Inherit from BaseController
         # OR absolute: vl, vr, steer. Current MPC is formulated for delta_u.
         # Inputs u = [v_left_wheel, v_right_wheel, steering_angle_delta]
         self.nu = 3
-        self.ny = 4   #[x, y, theta. v] Output dimension (typically same as state for MPC tracking)
+        self.ny = 5  #[x, y, theta. v] Output dimension (typically same as state for MPC tracking)
 
         # self.x_aug = np.zeros((self.nx + self.nu, 1)) # Old augmented state, not directly used in this structure
 
         # Linearized model matrices (updated at each step)
         # A is simplified to identity in mdl_update, implying x_k+1 = x_k + B*du_k + f(x_k, u_k-1)*dt
         # For a pure delta_u formulation like x_k+1 = A x_k + B delta_u_k, A should be I here.
-        self.A_mpc = np.eye(self.nx)    # Renamed to avoid conflict if base had self.A
+        self.A_mpc = np.eye(
+            self.nx)  # Renamed to avoid conflict if base had self.A
         self.B_mpc = np.zeros((self.nx, self.nu))
-        self.B_mpc[3,2] = 1
-        self.B_mpc[4,0] = 0.5
-        self.B_mpc[4,1] = 0.5
-            
-        self.C_mpc = np.zeros((self.ny,self.nx))
-        self.C_mpc[0:3,0:3] = np.eye(self.ny-1)   
-        self.C_mpc[3,4] = 1 
+        self.B_mpc[3, 2] = 1
+        self.B_mpc[4, 0] = 0.5
+        self.B_mpc[4, 1] = 0.5
+
+        # self.C_mpc = np.zeros((self.ny, self.nx))
+        self.C_mpc = np.eye((self.ny))
+        # self.C_mpc[0:3, 0:3] = np.eye(self.ny - 1)
+        # self.C_mpc[3, 4] = 1
 
         #self.slip_const_matrix_row = np.zeros((1, 3))    # Stores the actual slip constraint coefficients for one step
 
@@ -79,29 +86,45 @@ class MPCController(BaseController):    # Inherit from BaseController
 
         # Cost matrices
         # Q for states [x, y, theta, delta, v]
-        q_diag_default = [1.0, 1.0, 1.0, 1.0]    # Default Q diagonals
-        actual_q_diag = q_diag if q_diag is not None and len(q_diag) == self.nx else q_diag_default
-        q_single = np.diag(actual_q_diag)
+        q_diag_default = [1.0, 1.0, 1.0, 1.0, 1.0]  # Default Q diagonals
+        actual_q_diag = q_diag if q_diag is not None and len(
+            q_diag) == self.ny else q_diag_default
 
         # R for control inputs [v_left, v_right, steering_angle_delta]
-        r_diag_default = [1.0, 1.0, 1.0]    # Default R diagonals
-        actual_r_diag = r_diag if r_diag is not None and len(r_diag) == self.nu else r_diag_default
-        r_single = np.diag(actual_r_diag)
+        r_diag_default = [1.0, 1.0, 1.0]  # Default R diagonals
+        actual_r_diag = r_diag if r_diag is not None and len(
+            r_diag) == self.nu else r_diag_default
 
-        self.Q_mpc = sparse.block_diag([q_single] * self.N).tocsc()
-        self.R_mpc = sparse.block_diag([r_single] * self.M).tocsc()    # Use self.M for control horizon
+        self.Q_mpc = np.zeros((self.ny * self.N, self.ny * self.N))
+        for indx in range(self.N):
+            self.Q_mpc[indx * self.ny:indx * self.ny + self.ny,
+                       indx * self.ny:indx * self.ny +
+                       self.ny] = np.diag(actual_q_diag) / (1.0**indx)
 
-        self.du = np.zeros((self.nu, 1))    # Change in control input
-        self.u_prev = np.zeros((self.nu, 1))    # Previous control input [vl, vr, delta_steer]
+        self.R_mpc = np.zeros((self.nu * self.M, self.nu * self.M))
+        for indx in range(self.M):
+            self.R_mpc[indx * self.nu:indx * self.nu + self.nu,
+                       indx * self.nu:indx * self.nu +
+                       self.nu] = np.diag(actual_r_diag) / (1.0**indx)
+
+        # self.Q_mpc = sparse.block_diag([q_single] * self.N).tocsc()
+        # self.R_mpc = sparse.block_diag(
+        #     [r_single] * self.M).tocsc()  # Use self.M for control horizon
+
+        self.du = np.zeros((self.nu, 1))  # Change in control input
+        self.u_prev = np.zeros(
+            (self.nu, 1))  # Previous control input [vl, vr, delta_steer]
 
         # Absolute constraints on control inputs (u = [vl, vr, delta_steer])
         # Note: These are not directly used in the OSQP formulation for du yet.
         # To use them, bounds on du would be: u_min - u_prev <= du <= u_max - u_prev
-        self.u_min_abs = np.array([0.0, 0.0, -np.deg2rad(30)])    # Example: vl, vr >=0, delta +/-30 deg
-        self.u_max_abs = np.array([1.5, 1.5, np.deg2rad(30)])    # Example: vl, vr <=1.5 m/s
-        
+        self.u_min_abs = np.array([0.0, 0.0, -np.deg2rad(30)
+                                   ])  # Example: vl, vr >=0, delta +/-30 deg
+        self.u_max_abs = np.array([1.5, 1.5, np.deg2rad(30)
+                                   ])  # Example: vl, vr <=1.5 m/s
 
         self.osqp_prob = osqp.OSQP()
+        print(self.osqp_prob.version())
         self.osqp_solver_initialized = False
 
     def _update_horizon_reference(self):
@@ -112,12 +135,17 @@ class MPCController(BaseController):    # Inherit from BaseController
         """
         if self._path_x.size == 0:
             # print("[MPC] Warning: No reference path set. Using current state as reference.")
-            current_state_ref = np.array([self.current_x, self.current_y, self.current_theta, self.current_v])
-            self.ref_horizon = np.tile(current_state_ref, self.N).reshape(-1, 1)
+            current_state_ref = np.array([
+                self.current_x, self.current_y, self.current_theta,
+                self.current_v
+            ])
+            self.ref_horizon = np.tile(current_state_ref,
+                                       self.N).reshape(-1, 1)
             return
 
         # Find the closest point on the path to the current vehicle position
-        dists = np.hypot(self._path_x - self.current_x, self._path_y - self.current_y)
+        dists = np.hypot(self._path_x - self.current_x,
+                         self._path_y - self.current_y)
         closest_idx = np.argmin(dists)
 
         # Extract N points for the horizon starting from the closest point
@@ -125,18 +153,24 @@ class MPCController(BaseController):    # Inherit from BaseController
         path_len = len(self._path_x)
 
         for i in range(self.N):
-            idx = min(closest_idx + i, path_len - 1)    # Ensure we don't go out of bounds
+            idx = min(closest_idx + i,
+                      path_len - 1)  # Ensure we don't go out of bounds
 
             current_ref_x = self._path_x[idx]
             current_ref_y = self._path_y[idx]
-            current_ref_theta = self._path_theta[idx] if self._path_theta.size > 0 else self.current_theta    # Use path theta if available
-            current_ref_v = self._path_v[idx] if self._path_v.size > 0 else self.current_v    # Use path velocity if available
-           
-            ref_list.extend([current_ref_x, current_ref_y, current_ref_theta, self.ref_v])
+            current_ref_theta = self._path_theta[
+                idx] if self._path_theta.size > 0 else self.current_theta  # Use path theta if available
+            current_ref_v = self._path_v[
+                idx] if self._path_v.size > 0 else self.current_v  # Use path velocity if available
+
+            ref_list.extend([
+                current_ref_x, current_ref_y, current_ref_theta, 0, self.ref_v
+            ])
 
         self.ref_horizon = np.array(ref_list).reshape(-1, 1)
 
-    def _mdl_update_linearized(self, current_v_vehicle: float, prev_vl: float, prev_vr: float, prev_delta: float):
+    def _mdl_update_linearized(self, current_v_vehicle: float, prev_vl: float,
+                               prev_vr: float, prev_delta: float):
         """
         Updates the linearized state-space model (A_mpc, B_mpc, C_mpc)
         around the current state (self.current_theta, current_v_vehicle) and previous inputs.
@@ -144,13 +178,12 @@ class MPCController(BaseController):    # Inherit from BaseController
         The f(xk,uk-1)*dt term is implicit            current_ref_v = self._path_v[idx] if self._path_v.size > 0 else self.current_v    # Use path velocity if available
         ly handled by predicting from current state and adding G*dU.
         """
-        current_theta = self.current_theta    # From update_states
+        current_theta = self.current_theta  # From update_states
 
         # A_mpc remains Identity matrix for this common delta_u MPC formulation
-        self.A_mpc = np.eye(self.nx)
+
         self.A_mpc[(0, 4)] = (self.ts) * cos(current_theta)
         self.A_mpc[(1, 4)] = (self.ts) * sin(current_theta)
-
 
         # --- Compute B_base (continuous time d(state_derivs)/du) ---
         # Inputs u = [v_left_wheel, v_right_wheel, steering_angle_delta]
@@ -159,7 +192,7 @@ class MPCController(BaseController):    # Inherit from BaseController
         # The vl0, vr0 passed are u_k-1 and are used for linearization point of derivative wrt delta.
 
         # Corrected B_base computation:
-        tan_prev_delta = tan(prev_delta)    # Use math.tan
+        tan_prev_delta = tan(prev_delta)  # Use math.tan
         # tan_prev_delta = np.clip(tan_prev_delta, -1.0, 1.0) # Clipping might be aggressive here. Max steer is usually less.
 
         # Derivative of theta_dot = ((vl+vr)/(2*L)) * tan(delta)
@@ -169,15 +202,19 @@ class MPCController(BaseController):    # Inherit from BaseController
         # Note: vl0, vr0 are from u_prev, representing the linearization point for speed.
 
         # Coeff for d(theta_dot)/ddelta
-        a_coeff = (prev_vl + prev_vr) / (2 * self.L * (cos(prev_delta)**2 + 1e-6))    # Added epsilon for cos^2
+        a_coeff = (prev_vl + prev_vr) / (2 * self.L *
+                                         (cos(prev_delta)**2 + 1e-6)
+                                         )  # Added epsilon for cos^2
+        # a_coeff = ((prev_vl + prev_vr) *
+        #            (1 + tan_prev_delta**2)) / (2 * self.L)
         # Coeff for d(theta_dot)/dvl and d(theta_dot)/dvr
         b_coeff = tan_prev_delta / (2 * self.L)
-        self.B_mpc[2,0] = b_coeff*(self.ts) 
-        self.B_mpc[2,1] = b_coeff*(self.ts) 
-        self.B_mpc[2,2] = a_coeff*(self.ts) 
+        self.B_mpc[2, 0] = b_coeff * self.ts
+        self.B_mpc[2, 1] = b_coeff * self.ts
+        self.B_mpc[2, 2] = a_coeff * self.ts
 
     def update_pred_mdl(self):
- 
+
         G = np.zeros((self.ny * self.N, self.nu * self.M))
         Phi = np.zeros((self.ny * self.N, self.nx))
 
@@ -187,16 +224,20 @@ class MPCController(BaseController):    # Inherit from BaseController
         for i in range(self.N):
             j = 0
             if i != 0:
-                Phi[i * self.ny:(i + 1) * self.ny, :] = Phi[(i - 1) * self.ny:i * self.ny, :] @ self.A_mpc
+                Phi[i * self.ny:(i + 1) *
+                    self.ny, :] = Phi[(i - 1) * self.ny:i *
+                                      self.ny, :] @ self.A_mpc
                 aux = self.C_mpc @ (self.A_mpc @ self.B_mpc)
 
             while (j < self.M) and (i + j < self.N):
-                G[(i + j) * self.ny:(i + j + 1) * self.ny, j * self.nu:(j + 1) * self.nu] = aux
+                G[(i + j) * self.ny:(i + j + 1) * self.ny,
+                  j * self.nu:(j + 1) * self.nu] = aux
                 j += 1
 
         return Phi, G
 
-    def _solve_qp(self, current_physical_state_vec: np.ndarray, prev_vl: float, prev_vr: float, prev_delta: float) -> np.ndarray:
+    def _solve_qp(self, current_physical_state_vec: np.ndarray, prev_vl: float,
+                  prev_vr: float, prev_delta: float) -> np.ndarray:
         """
         Core MPC QP solver.
         Args:
@@ -206,7 +247,8 @@ class MPCController(BaseController):    # Inherit from BaseController
             u_k: The new absolute control command [vl, vr, delta_steer]
         """
         # Update the linearized model (A_mpc, B_mpc) around current state and u_prev
-        self._mdl_update_linearized(current_physical_state_vec[3], prev_vl, prev_vr, prev_delta)
+        self._mdl_update_linearized(current_physical_state_vec[3], prev_vl,
+                                    prev_vr, prev_delta)
 
         # Get prediction matrices Phi (maps x_current to future x) and G (maps DU to future x)
         Phi_pred, G_pred = self.update_pred_mdl()
@@ -229,10 +271,13 @@ class MPCController(BaseController):    # Inherit from BaseController
         # 2. Absolute input limits: u_min_abs <= u_prev + du <= u_max_abs
         #    u_min_abs - u_prev <= du <= u_max_abs - u_prev
         # These bounds need to be formulated for the entire horizon M for DU vector.
-        u_prev_vec = np.array([prev_vl, prev_vr, prev_delta]).reshape(self.nu, 1)
+        u_prev_vec = np.array([prev_vl, prev_vr,
+                               prev_delta]).reshape(self.nu, 1)
 
-        lower_bounds_du_abs = np.tile(self.u_min_abs.reshape(self.nu, 1) - u_prev_vec, (self.M, 1))
-        upper_bounds_du_abs = np.tile(self.u_max_abs.reshape(self.nu, 1) - u_prev_vec, (self.M, 1))
+        lower_bounds_du_abs = np.tile(
+            self.u_min_abs.reshape(self.nu, 1) - u_prev_vec, (self.M, 1))
+        upper_bounds_du_abs = np.tile(
+            self.u_max_abs.reshape(self.nu, 1) - u_prev_vec, (self.M, 1))
 
         # 3. Slip constraint (if active): A_slip_horizon * DU approx -A_slip_single_step * U_prev_horizon
         # User's formulation was l_cons_slip <= A_slip_block_diag * (U_prev_horizon + DU) <= u_cons_slip
@@ -273,15 +318,33 @@ class MPCController(BaseController):    # Inherit from BaseController
         #     A_final_cons = sparse.vstack([A_abs_lim, A_cons_slip_block_diag], format="csc")
         #     l_final_cons = np.hstack([l_abs_lim, l_cons_slip_active])
         #     u_final_cons = np.hstack([u_abs_lim, u_cons_slip_active])
-        H=sparse.csc_matrix(H)
-        self.osqp_prob.setup(P=H, q=F_transposed.flatten(), A=None, l=None, u=None, verbose=False, warm_start=True)
-        # if not self.osqp_solver_initialized:
 
+        osqp_prob = osqp.OSQP()
+        H = sparse.csc_matrix(H)
+        osqp_prob.setup(P=H,
+                        q=F_transposed.flatten(),
+                        A=None,
+                        l=None,
+                        u=None,
+                        verbose=False,
+                        warm_start=True)
+        # if not self.osqp_solver_initialized:
+        #     self.osqp_prob.setup(P=H,
+        #                          q=F_transposed.flatten(),
+        #                          A=None,
+        #                          l=None,
+        #                          u=None,
+        #                          verbose=False,
+        #                          warm_start=True)
         #     self.osqp_solver_initialized = True
         # else:
-        #     self.osqp_prob.update(Px=sparse.triu(H).data, Ax=None, q=F_transposed.flatten(), l=None, u=None)
+        #     self.osqp_prob.update(Px=sparse.triu(H).data,
+        #                           Ax=None,
+        #                           q=F_transposed.flatten(),
+        #                           l=None,
+        #                           u=None)
 
-        res = self.osqp_prob.solve()
+        res = osqp_prob.solve()
 
         if res.info.status != "solved":
             # print(f"[MPC] QP not solved. Status: {res.info.status}. Using zero du.")
@@ -292,13 +355,16 @@ class MPCController(BaseController):    # Inherit from BaseController
         # Extract the first control action from the sequence
         self.du = optimal_du_sequence[0:self.nu].reshape(self.nu, 1)
 
+        if (self.du[2] > 1):
+            pass
+
         # Update u_prev for the next iteration
         # u_k = u_{k-1} + du_0
         u_current_applied = u_prev_vec + self.du
 
-        self.u_prev = u_current_applied    # Store u_k as u_prev for next step
+        self.u_prev = u_current_applied  # Store u_k as u_prev for next step
 
-        return self.u_prev.flatten()    # Return [vl_k, vr_k, delta_k]
+        return self.u_prev.flatten()  # Return [vl_k, vr_k, delta_k]
 
     # Inherited from BaseController, called by Simulator
     def compute_control(self) -> dict:
@@ -310,21 +376,27 @@ class MPCController(BaseController):    # Inherit from BaseController
         self._update_horizon_reference()
 
         # 2. Get current physical state and previous control input u_{k-1}
-        current_physical_state_vec = np.array([self.current_x, self.current_y, self.current_theta, self.current_delta, self.current_v])
-        prev_vl, prev_vr, prev_delta = self.u_prev.flatten()    # u_prev is u_{k-1}
+        current_physical_state_vec = np.array([
+            self.current_x, self.current_y, self.current_theta,
+            self.current_delta, self.current_v
+        ])
+        prev_vl, prev_vr, prev_delta = self.u_prev.flatten(
+        )  # u_prev is u_{k-1}
 
         # 3. Solve the MPC QP to get new absolute command u_k = [vl, vr, delta]
         # The _solve_qp method also updates self.u_prev to u_k internally.
-        new_u_abs = self._solve_qp(current_physical_state_vec, prev_vl, prev_vr, prev_delta)
+        new_u_abs = self._solve_qp(current_physical_state_vec, prev_vl,
+                                   prev_vr, prev_delta)
 
-        vl_cmd_linear, vr_cmd_linear, delta_cmd_rad = new_u_abs[0], new_u_abs[1], new_u_abs[2]
+        vl_cmd_linear, vr_cmd_linear, delta_cmd_rad = new_u_abs[0], new_u_abs[
+            1], new_u_abs[2]
 
         # 4. Return commands in the expected dictionary format
         # Simulator expects linear wheel velocities (v_left, v_right) and delta in rad.
         return {
             'delta': delta_cmd_rad,
-            'v_left': vl_cmd_linear,    # Linear speed of left wheel (m/s)
-            'v_right': vr_cmd_linear    # Linear speed of right wheel (m/s)
+            'v_left': vl_cmd_linear,  # Linear speed of left wheel (m/s)
+            'v_right': vr_cmd_linear  # Linear speed of right wheel (m/s)
         }
 
     # Kept original set_reference for now, but _update_horizon_reference is preferred for dynamic use
@@ -335,11 +407,17 @@ class MPCController(BaseController):    # Inherit from BaseController
         Args:
             x_refs_horizon (np.array): Array of shape (N, ny) or (N*ny, 1).
         """
-        if x_refs_horizon.shape[0] != self.N and x_refs_horizon.shape[0] != self.N * self.ny:
-            raise ValueError(f"[MPC] Fixed reference trajectory must have {self.N} steps for {self.ny} states each.")
-        if x_refs_horizon.ndim == 2 and x_refs_horizon.shape[0] == self.N:    # Shape (N, ny)
+        if x_refs_horizon.shape[0] != self.N and x_refs_horizon.shape[
+                0] != self.N * self.ny:
+            raise ValueError(
+                f"[MPC] Fixed reference trajectory must have {self.N} steps for {self.ny} states each."
+            )
+        if x_refs_horizon.ndim == 2 and x_refs_horizon.shape[
+                0] == self.N:  # Shape (N, ny)
             self.ref_horizon = x_refs_horizon.flatten('C').reshape(-1, 1)
-        elif x_refs_horizon.shape == (self.N * self.ny, 1):    # Shape (N*ny, 1)
+        elif x_refs_horizon.shape == (self.N * self.ny, 1):  # Shape (N*ny, 1)
             self.ref_horizon = x_refs_horizon
         else:
-            raise ValueError(f"[MPC] Incorrect shape for fixed reference trajectory. Expected ({self.N},{self.ny}) or ({self.N*self.ny},1).")
+            raise ValueError(
+                f"[MPC] Incorrect shape for fixed reference trajectory. Expected ({self.N},{self.ny}) or ({self.N*self.ny},1)."
+            )
