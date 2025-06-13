@@ -61,6 +61,7 @@ class MPCController(BaseController):  # Inherit from BaseController
         # Inputs u = [v_left_wheel, v_right_wheel, steering_angle_delta]
         self.nu = 3
         self.ny = 5  #[x, y, theta. v] Output dimension (typically same as state for MPC tracking)
+        self.nc = 2  # Number of constraints
 
         # self.x_aug = np.zeros((self.nx + self.nu, 1)) # Old augmented state, not directly used in this structure
 
@@ -76,6 +77,9 @@ class MPCController(BaseController):  # Inherit from BaseController
 
         # self.C_mpc = np.zeros((self.ny, self.nx))
         self.C_mpc = np.eye((self.ny))
+        self.C_cons = np.zeros((self.nc, self.nx))
+        self.C_cons[0, 3] = 1
+        self.C_cons[1, 4] = 1
         # self.C_mpc[0:3, 0:3] = np.eye(self.ny - 1)
         # self.C_mpc[3, 4] = 1
 
@@ -118,13 +122,13 @@ class MPCController(BaseController):  # Inherit from BaseController
         # Absolute constraints on control inputs (u = [vl, vr, delta_steer])
         # Note: These are not directly used in the OSQP formulation for du yet.
         # To use them, bounds on du would be: u_min - u_prev <= du <= u_max - u_prev
-        self.u_min_abs = np.array([0.0, 0.0, -np.deg2rad(30)
+        self.cons_min = np.array([-np.deg2rad(10), -1.5
                                    ])  # Example: vl, vr >=0, delta +/-30 deg
-        self.u_max_abs = np.array([1.5, 1.5, np.deg2rad(30)
+        self.cons_max = np.array([np.deg2rad(10), 0.7
                                    ])  # Example: vl, vr <=1.5 m/s
 
         self.osqp_prob = osqp.OSQP()
-        print(self.osqp_prob.version())
+        
         self.osqp_solver_initialized = False
 
     def _update_horizon_reference(self):
@@ -218,23 +222,43 @@ class MPCController(BaseController):  # Inherit from BaseController
         G = np.zeros((self.ny * self.N, self.nu * self.M))
         Phi = np.zeros((self.ny * self.N, self.nx))
 
+        G_cons = np.zeros((self.nc * self.N, self.nu * self.M))
+        Phi_cons = np.zeros((self.nc * self.N, self.nx))
+
         aux = self.C_mpc @ self.B_mpc
         Phi[0:self.ny, :] = self.C_mpc @ self.A_mpc
 
+        aux_cons = self.C_cons @ self.B_mpc
+        Phi_cons[0:self.nc, :] = self.C_cons @ self.A_mpc
+
         for i in range(self.N):
             j = 0
-            if i != 0:
+            if i != 0: 
+                # update the predictive model
                 Phi[i * self.ny:(i + 1) *
                     self.ny, :] = Phi[(i - 1) * self.ny:i *
                                       self.ny, :] @ self.A_mpc
                 aux = self.C_mpc @ (self.A_mpc @ self.B_mpc)
+                # update the constraint model
+                Phi_cons[i * self.nc:(i + 1) *
+                    self.nc, :] = Phi_cons[(i - 1) * self.nc:i *
+                                      self.nc, :] @ self.A_mpc
+                aux_cons = self.C_cons @ (self.A_mpc @ self.B_mpc)
 
             while (j < self.M) and (i + j < self.N):
+                # update the predictive model
                 G[(i + j) * self.ny:(i + j + 1) * self.ny,
                   j * self.nu:(j + 1) * self.nu] = aux
+                
+                # update the constraint model
+
+                G_cons[(i + j) * self.nc:(i + j + 1) * self.nc,
+                  j * self.nu:(j + 1) * self.nu] = aux_cons
+
                 j += 1
 
-        return Phi, G
+        return Phi, G, Phi_cons, G_cons
+
 
     def _solve_qp(self, current_physical_state_vec: np.ndarray, prev_vl: float,
                   prev_vr: float, prev_delta: float) -> np.ndarray:
@@ -251,7 +275,7 @@ class MPCController(BaseController):  # Inherit from BaseController
                                     prev_vr, prev_delta)
 
         # Get prediction matrices Phi (maps x_current to future x) and G (maps DU to future x)
-        Phi_pred, G_pred = self.update_pred_mdl()
+        Phi_pred, G_pred, Phi_cons, G_cons = self.update_pred_mdl()
 
         # Cost function: J = (G*DU + Phi*x_current - X_ref)^T Q (G*DU + Phi*x_current - X_ref) + DU^T R DU
         # J = DU^T (G^T Q G + R) DU + 2 * (Phi*x_current - X_ref)^T Q G * DU + const
@@ -274,10 +298,10 @@ class MPCController(BaseController):  # Inherit from BaseController
         u_prev_vec = np.array([prev_vl, prev_vr,
                                prev_delta]).reshape(self.nu, 1)
 
-        lower_bounds_du_abs = np.tile(
-            self.u_min_abs.reshape(self.nu, 1) - u_prev_vec, (self.M, 1))
-        upper_bounds_du_abs = np.tile(
-            self.u_max_abs.reshape(self.nu, 1) - u_prev_vec, (self.M, 1))
+        lower_bounds_du_abs = np.tile(self.cons_min, (self.N, 1)).reshape(
+            self.nc * self.N, 1) - Phi_cons@x_curr_reshaped
+        upper_bounds_du_abs = np.tile(self.cons_max, (self.N, 1)).reshape(
+            self.nc * self.N, 1) - Phi_cons@x_curr_reshaped
 
         # 3. Slip constraint (if active): A_slip_horizon * DU approx -A_slip_single_step * U_prev_horizon
         # User's formulation was l_cons_slip <= A_slip_block_diag * (U_prev_horizon + DU) <= u_cons_slip
@@ -318,14 +342,15 @@ class MPCController(BaseController):  # Inherit from BaseController
         #     A_final_cons = sparse.vstack([A_abs_lim, A_cons_slip_block_diag], format="csc")
         #     l_final_cons = np.hstack([l_abs_lim, l_cons_slip_active])
         #     u_final_cons = np.hstack([u_abs_lim, u_cons_slip_active])
-
+        
+        
         osqp_prob = osqp.OSQP()
         H = sparse.csc_matrix(H)
         osqp_prob.setup(P=H,
                         q=F_transposed.flatten(),
-                        A=None,
-                        l=None,
-                        u=None,
+                        A=sparse.csc_matrix(G_cons),
+                        l=lower_bounds_du_abs,
+                        u=upper_bounds_du_abs,
                         verbose=False,
                         warm_start=True)
         # if not self.osqp_solver_initialized:

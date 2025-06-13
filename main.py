@@ -58,8 +58,8 @@ def run_simulation(use_mechanical_differential_model, path_x, path_y,
             ref_v=0.75,  # Pass reference velocities for the path
             dt=
             0.1,  # MPC sample time, consider aligning with sim.dt_path_controller
-            horizon=1,  # Prediction horizon (N)
-            control_horizon_m=1,  # Control horizon (M)
+            horizon=10,  # Prediction horizon (N)
+            control_horizon_m=5,  # Control horizon (M)
             use_differential=
             use_mechanical_differential_model,  # For slip constraint
             q_diag=q_diag_mpc,  # State error costs
