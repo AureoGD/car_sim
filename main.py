@@ -47,8 +47,18 @@ def run_simulation(use_mechanical_differential_model, path_x, path_y,
         # Example Q and R diagonal values for MPC cost function
         # q_diag: [x_err, y_err, theta_err, v_err]
         # r_diag: [delta_v_left, delta_v_right, delta_steer_angle]
-        q_diag_mpc = [5.0, 5.0, 1.5, 1.0, 5.0]
-        r_diag_mpc = [1.0, 1.0, 1.5]
+
+        # Foco em seguir a linha, com boa estabilidade de orientação e comandos suaves
+        # q_diag_mpc = [8.0, 8.0, 5.0, 2.0, 1.0]
+        # r_diag_mpc = [0.5, 0.5, 5.0]
+
+        # Persegue a linha a todo custo.
+        # q_diag_mpc = [20.0, 20.0, 2.0, 1.0, 2.0]
+        # r_diag_mpc = [0.1, 0.1, 0.5]
+
+        # Comandos muito suaves. O carro será "preguiçoso" e pode cortar curvas.
+        q_diag_mpc = [2.0, 2.0, 1.0, 0.5, 1.0]
+        r_diag_mpc = [2.0, 2.0, 20.0]
 
         controller = MPCController(
             model=model,
@@ -61,7 +71,7 @@ def run_simulation(use_mechanical_differential_model, path_x, path_y,
             horizon=10,  # Prediction horizon (N)
             control_horizon_m=5,  # Control horizon (M)
             use_differential=
-            use_mechanical_differential_model,  # For slip constraint
+            not use_mechanical_differential_model,  # For slip constraint
             q_diag=q_diag_mpc,  # State error costs
             r_diag=r_diag_mpc  # Control input change costs
         )
@@ -90,9 +100,9 @@ def run_simulation(use_mechanical_differential_model, path_x, path_y,
 
 
 if __name__ == "__main__":
-    CONTROL_METHOD = "mpc"  # Options: "pure_pursuit", "stanley" (MPC needs refactor)
+    CONTROL_METHOD = "stanley"  # Options: "pure_pursuit", "stanley" (MPC needs refactor)
     V_CAR_REF_MAIN = 0.75
-    T_MAIN = 32.5
+    T_MAIN = 50
     # Parameter for AckermannSlipModel's differential behavior
     USE_MECHANICAL_DIFFERENTIAL_IN_MODEL = False  # Test without the ideal differential effect
 
@@ -102,7 +112,7 @@ if __name__ == "__main__":
     path_gen.add_curve(radius=3, angle_deg=60)
     path_gen.add_straight(length=10)
     path_gen.add_curve(radius=4, angle_deg=-60)
-    path_gen.add_straight(length=5)
+    path_gen.add_straight(length=10)
     path_x, path_y, path_theta = path_gen.get_path()
 
     print(
@@ -144,8 +154,8 @@ if __name__ == "__main__":
     plotter_comparison = SimulationPlotter(
         log_data_list=[log_data_run1, log_data_run2],
         labels=[
-            f"{CONTROL_METHOD} (Diff_Model: {USE_MECHANICAL_DIFFERENTIAL_IN_MODEL})",
-            f"{CONTROL_METHOD} (Diff_Model: True)"
+            f"{CONTROL_METHOD} (Elec)",
+            f"{CONTROL_METHOD} (Mec)"
         ])
     # # Now use plotter_comparison for plots
     plotter = plotter_comparison  # Use the comparison plotter for subsequent calls

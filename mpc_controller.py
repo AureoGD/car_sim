@@ -64,12 +64,9 @@ class MPCController(BaseController):  # Inherit from BaseController
         self.nc = 2  # Number of constraints
 
         # self.x_aug = np.zeros((self.nx + self.nu, 1)) # Old augmented state, not directly used in this structure
+        self.slip_cons = np.zeros((1, self.nu)) if self.use_differential else None
 
-        # Linearized model matrices (updated at each step)
-        # A is simplified to identity in mdl_update, implying x_k+1 = x_k + B*du_k + f(x_k, u_k-1)*dt
-        # For a pure delta_u formulation like x_k+1 = A x_k + B delta_u_k, A should be I here.
-        self.A_mpc = np.eye(
-            self.nx)  # Renamed to avoid conflict if base had self.A
+        self.A_mpc = np.eye(self.nx)  # Renamed to avoid conflict if base had self.A
         self.B_mpc = np.zeros((self.nx, self.nu))
         self.B_mpc[3, 2] = 1
         self.B_mpc[4, 0] = 0.5
@@ -122,9 +119,9 @@ class MPCController(BaseController):  # Inherit from BaseController
         # Absolute constraints on control inputs (u = [vl, vr, delta_steer])
         # Note: These are not directly used in the OSQP formulation for du yet.
         # To use them, bounds on du would be: u_min - u_prev <= du <= u_max - u_prev
-        self.cons_min = np.array([-np.deg2rad(10), -1.5
+        self.cons_min = np.array([-np.deg2rad(30), -2
                                    ])  # Example: vl, vr >=0, delta +/-30 deg
-        self.cons_max = np.array([np.deg2rad(10), 0.7
+        self.cons_max = np.array([np.deg2rad(30), 2
                                    ])  # Example: vl, vr <=1.5 m/s
 
         self.osqp_prob = osqp.OSQP()
@@ -197,6 +194,7 @@ class MPCController(BaseController):  # Inherit from BaseController
 
         # Corrected B_base computation:
         tan_prev_delta = tan(prev_delta)  # Use math.tan
+        cos_prev_delta = cos(prev_delta)**2 + self.epsilon # Adiciona epsilon para evitar divisão por zero
         # tan_prev_delta = np.clip(tan_prev_delta, -1.0, 1.0) # Clipping might be aggressive here. Max steer is usually less.
 
         # Derivative of theta_dot = ((vl+vr)/(2*L)) * tan(delta)
@@ -207,7 +205,7 @@ class MPCController(BaseController):  # Inherit from BaseController
 
         # Coeff for d(theta_dot)/ddelta
         a_coeff = (prev_vl + prev_vr) / (2 * self.L *
-                                         (cos(prev_delta)**2 + 1e-6)
+                                         cos_prev_delta
                                          )  # Added epsilon for cos^2
         # a_coeff = ((prev_vl + prev_vr) *
         #            (1 + tan_prev_delta**2)) / (2 * self.L)
@@ -216,6 +214,24 @@ class MPCController(BaseController):  # Inherit from BaseController
         self.B_mpc[2, 0] = b_coeff * self.ts
         self.B_mpc[2, 1] = b_coeff * self.ts
         self.B_mpc[2, 2] = a_coeff * self.ts
+
+        # Atualizar coeficientes da restrição de escorregamento
+
+        if self.use_differential and self.b > 1e-6:
+            v_sum = prev_vr + prev_vl
+            # Evitar divisão por zero se a soma das velocidades for próxima de zero
+            if abs(v_sum) < 1e-6:
+                al = 0.0
+                ar = 0.0
+            else:
+                v_sum_sq = v_sum**2
+                al = -2 * prev_vr / v_sum_sq
+                ar =  2 * prev_vl / v_sum_sq
+            
+            # sec^2(delta) = 1/cos^2(delta)
+            ad = - (self.b / (2 * self.L)) * (1 / cos_prev_delta)
+
+            self.slip_cons= np.array([[al, ar, ad]])
 
     def update_pred_mdl(self):
 
@@ -298,59 +314,35 @@ class MPCController(BaseController):  # Inherit from BaseController
         u_prev_vec = np.array([prev_vl, prev_vr,
                                prev_delta]).reshape(self.nu, 1)
 
-        lower_bounds_du_abs = np.tile(self.cons_min, (self.N, 1)).reshape(
+        lower_bounds_state = np.tile(self.cons_min, (self.N, 1)).reshape(
             self.nc * self.N, 1) - Phi_cons@x_curr_reshaped
-        upper_bounds_du_abs = np.tile(self.cons_max, (self.N, 1)).reshape(
+        upper_bounds_state = np.tile(self.cons_max, (self.N, 1)).reshape(
             self.nc * self.N, 1) - Phi_cons@x_curr_reshaped
+        A_state_cons = G_cons
 
-        # 3. Slip constraint (if active): A_slip_horizon * DU approx -A_slip_single_step * U_prev_horizon
-        # User's formulation was l_cons_slip <= A_slip_block_diag * (U_prev_horizon + DU) <= u_cons_slip
-        # Which means l_cons_slip - A_slip * U_prev <= A_slip * DU <= u_cons_slip - A_slip * U_prev
-        # For simplicity here, using the user's original constraint A_cons_slip_block_diag on DU with fixed bounds
-        # (This is an area for refinement if slip constraint is critical)
-        # A_constraints_list = [sparse.csc_matrix(lower_bounds_du_abs.shape[0], G_pred.shape[1])]    # Placeholder for actual constraint matrix build
-        # l_bounds_list = [lower_bounds_du_abs]
-        # u_bounds_list = [upper_bounds_du_abs]
+        if self.use_differential and self.b > 1e-6:
+            # Constrói a matriz diagonal em bloco para a restrição de escorregamento
+            A_slip_horizon = sparse.block_diag([self.slip_cons] * self.M).tocsc()
+            
+            # Combina as restrições de estado e de escorregamento
+            A_cons = sparse.vstack([A_state_cons, A_slip_horizon], format="csc")
+            l_cons = np.hstack([lower_bounds_state.flatten(), self.l_cons_slip.flatten()])
+            u_cons = np.hstack([upper_bounds_state.flatten(), self.u_cons_slip.flatten()])
+        else:
+            # Usa apenas as restrições de estado
+            A_cons = sparse.csc_matrix(A_state_cons)
+            l_cons = lower_bounds_state.flatten()
+            u_cons = upper_bounds_state.flatten()
+        # --- FIM DA MODIFICAÇÃO ---
 
-        # Build the actual constraint matrix for absolute limits
-        # Constraint is I * DU >= lower_bounds_du_abs and I * DU <= upper_bounds_du_abs
-        # So, A_for_abs_limits is block_diag([I_nu]*M)
-        # # l_for_abs_limits is lower_bounds_du_abs.flatten()
-        # # u_for_abs_limits is upper_bounds_du_abs.flatten()
-        # A_abs_lim = sparse.block_diag([sparse.eye(self.nu)] * self.M).tocsc()
-        # l_abs_lim = lower_bounds_du_abs.flatten()
-        # u_abs_lim = upper_bounds_du_abs.flatten()
 
-        # A_final_cons = A_abs_lim
-        # l_final_cons = l_abs_lim
-        # u_final_cons = u_abs_lim
-
-        # if self.use_differential and self.b > 1e-6:
-        #     # A_slip applies to each u_k = u_{k-1} + du_k.
-        #     # slip_const_matrix_row @ (u_prev_step_j + du_j) is between -eps and eps
-        #     # => -eps - slip_const @ u_prev_j <= slip_const @ du_j <= eps - slip_const @ u_prev_j
-        #     # This means bounds change at each step 'j' of control horizon M if u_prev is updated.
-        #     # The original user code built A_cons from self.slip_const_matrix_row, which is updated once per call.
-        #     # This A_cons was M x (M*nu). Its l/u bounds were fixed at -eps, eps.
-        #     # This implied slip_const_matrix_row @ du_j ~ 0.
-
-        #     # Replicating original logic for A_cons for slip (applied to DU directly):
-        #     A_cons_slip_block_diag = sparse.block_diag([self.slip_const_matrix_row] * self.M).tocsc()
-        #     l_cons_slip_active = self.l_cons_slip.flatten()    # Should be M x 1
-        #     u_cons_slip_active = self.u_cons_slip.flatten()    # Should be M x 1
-
-        #     A_final_cons = sparse.vstack([A_abs_lim, A_cons_slip_block_diag], format="csc")
-        #     l_final_cons = np.hstack([l_abs_lim, l_cons_slip_active])
-        #     u_final_cons = np.hstack([u_abs_lim, u_cons_slip_active])
-        
-        
         osqp_prob = osqp.OSQP()
         H = sparse.csc_matrix(H)
         osqp_prob.setup(P=H,
                         q=F_transposed.flatten(),
-                        A=sparse.csc_matrix(G_cons),
-                        l=lower_bounds_du_abs,
-                        u=upper_bounds_du_abs,
+                        A=A_cons,
+                        l=l_cons,
+                        u=u_cons,
                         verbose=False,
                         warm_start=True)
         # if not self.osqp_solver_initialized:
