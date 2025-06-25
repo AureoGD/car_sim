@@ -3,6 +3,7 @@ import numpy as np
 # from base_velocity_controller import BaseController
 from motor_actuator import MotorActuator
 from motor_controller import MotorPID
+from velocity_control import VelocityController
 import pybullet as p
 import pybullet_data
 import time
@@ -48,6 +49,17 @@ class Simulator:
 
         self.v_car_ref = v_car_ref
         self.car_speed = 0
+
+        self.velocity_control = VelocityController(
+                 kp=1.0,
+                 ki=0.5,
+                 kd=0.1,
+                 N=10.0,
+                 ts=self.dt_speed_controller,
+                 sat_u= 1.0,  # Example: 150% of target speed
+                 sat_l=0.0
+                 )
+
 
         # Actuators objects and constants
         ol_pole = 11.58
@@ -167,7 +179,7 @@ class Simulator:
         if self.use_velocity_controller:
             car_speed, _, _ = self._car_speed()
             # add the control method in the future
-            # cdm_vel_car = self.velocity_controller.control(self.v_car_ref, self.car_speed)    # return the var velocity in m/s
+            cdm_vel_car = self.velocity_control.control(self.v_car_ref, car_speed)    # return the var velocity in m/s
         else:
             cdm_vel_car = self.v_car_ref
 

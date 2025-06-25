@@ -187,7 +187,7 @@ class SimulationPlotter:
         """
         num_logs = len(self.processed_logs)
         # Create a figure with 2 subplots (for left and right wheels)
-        fig, axs = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+        fig, axs = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
         fig.suptitle(f"RPM Profiles Comparison {title_suffix}", fontsize=16)
 
         for i, log in enumerate(self.processed_logs):

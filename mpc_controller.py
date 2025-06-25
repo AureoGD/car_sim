@@ -229,7 +229,7 @@ class MPCController(BaseController):  # Inherit from BaseController
                 ar =  2 * prev_vl / v_sum_sq
             
             # sec^2(delta) = 1/cos^2(delta)
-            ad = - (self.b / (2 * self.L)) * (1 / cos_prev_delta)
+            ad = - (self.b / ( self.L)) * (1 / cos_prev_delta)
 
             self.slip_cons= np.array([[al, ar, ad]])
 

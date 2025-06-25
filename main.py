@@ -58,7 +58,7 @@ def run_simulation(use_mechanical_differential_model, path_x, path_y,
 
         # Comandos muito suaves. O carro será "preguiçoso" e pode cortar curvas.
         q_diag_mpc = [2.0, 2.0, 1.0, 0.5, 1.0]
-        r_diag_mpc = [2.0, 2.0, 20.0]
+        r_diag_mpc = [2.0, 2.0, 10.0]
 
         controller = MPCController(
             model=model,
@@ -82,7 +82,7 @@ def run_simulation(use_mechanical_differential_model, path_x, path_y,
     sim = Simulator(
         model=model,
         controller=controller,
-        use_velocity_controller=False,  # Constant target speed for non-MPC
+        use_velocity_controller=True,  # Constant target speed for non-MPC
         x0=0.0,
         y0=0.0,
         theta0=0.0,
